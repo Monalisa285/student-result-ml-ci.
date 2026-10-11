@@ -47,7 +47,8 @@ jobs:
           name: student-result-ml-artifacts
           path: |
             wrong_model.pkl
-            metrics.json
-            student_results.csv
+            wrong_metrics.json
+            wrong_results.csv
           if-no-files-found: error
           retention-days: 7
+

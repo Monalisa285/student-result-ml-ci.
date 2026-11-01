@@ -18,32 +18,41 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      # 2. Set up Python
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
+      # 3. Upgrade pip
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
+      # 4. Install dependencies
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # 5. Train ML model
       - name: Train student result model
         run: python train_model.py
 
+      # 6. Check ML quality gate
       - name: Check ML quality gate
         run: python quality_gate.py
 
+      # 7. Run ML pipeline tests
       - name: Run automated ML tests
         run: python -m unittest test_ml_pipeline.py -v
 
+      # 8. Run application tests
       - name: Run prediction application tests
         run: python -m unittest test_app.py -v
 
+      # 9. Prepare release candidate
       - name: Prepare release candidate
         run: |
           mkdir -p release_candidate
@@ -55,10 +64,62 @@ jobs:
           cp .dockerignore release_candidate/
           printf "Student Result Prediction ML Application\nRun: python app.py\nEndpoint: POST /predict\n" > release_candidate/DEPLOYMENT.txt
 
+      # 10. Upload release candidate
       - name: Upload release candidate
         uses: actions/upload-artifact@v4
         with:
           name: student-result-ml-release
-          path: release_candidate/
+          path: release_candidate/**
           if-no-files-found: error
           retention-days: 7
+
+      # 11. Build Docker image
+      - name: Build Docker image
+        run: docker build -t student-result-ml:${{ github.sha }} .
+
+      # 12. Start Docker container
+      - name: Start Docker container
+        run: |
+          docker run -d \
+            --name student-result-ml-container \
+            -p 5000:5000 \
+            student-result-ml:${{ github.sha }}
+
+      # 13. Wait for application health check
+      - name: Wait for application to become ready
+        run: |
+          for i in {1..15}; do
+            if curl --fail --silent http://localhost:5000/health; then
+              echo "Application is ready."
+              exit 0
+            fi
+
+            echo "Waiting for application... attempt $i"
+            sleep 2
+          done
+
+          echo "Application did not become ready."
+          docker logs student-result-ml-container
+          exit 1
+
+      # 14. Test prediction endpoint
+      - name: Test prediction endpoint
+        run: |
+          response=$(curl --fail --silent --show-error \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d '{"attendance":90,"internal_marks":85,"assignment_marks":88,"previous_score":80}' \
+            http://localhost:5000/predict)
+
+          echo "Prediction response: $response"
+          echo "$response" | grep -q '"prediction"'
+
+      # 15. Show Docker container logs
+      - name: Show Docker container logs
+        if: always()
+        run: docker logs student-result-ml-container || true
+
+      # 16. Stop and remove Docker container
+      - name: Stop and remove Docker container
+        if: always()
+        run: docker rm -f student-result-ml-container || true
